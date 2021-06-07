@@ -1,19 +1,23 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace LogParse
 {
     public partial class Form1 : Form
     {
-        public MatchCollection myMatch;
-        Dictionary<string, Color> signatures = new Dictionary<string, Color>();
-        public string signatura;
-        public string fileText;
+        static AutoResetEvent waitHandler = new AutoResetEvent(true);
+        public List<string> journals = new List<string>();
+        public List<int> journalsLength = new List<int>();
+        public Dictionary<string, Color> signatures = new Dictionary<string, Color>();
+
         public Form1()
         {
             InitializeComponent();
@@ -55,34 +59,89 @@ namespace LogParse
                     signatures.Add(buf, tmp);
                 }
                 
-                signatura = buf;
+                //signatura = buf;
+                waitHandler.WaitOne();
+                richTextBoxParseResult.AppendText("Результаты парсинга журналов на вхождения строки " + buf + ": \n");
+                // richTextBoxParseResult.Text += "Результаты парсинга журналов на вхождения строки "
+                //                               + buf + ": \n";
+                waitHandler.Set();
+
+                // var padding = 0;
+                // for (int i = 0; i < 2; i++)
+                // {
+                //     waitHandler.WaitOne();
+                //     string textBuffer = File.ReadAllText(journals[i], Encoding.Default);
+                //     waitHandler.Set();
+                //     padding += textBuffer.Length;
+                // }
                 
-                Regex regex = new Regex(@signatura);
-                MatchCollection matches = regex.Matches(fileText);
-                
-                myMatch = matches;
-                
-                richTextBoxParseResult.Text = "Все вхождения строки "
-                                   + signatura + " в исходном тексте: " + "\r\n";
-                
-                if (matches.Count > 0)
+                Parallel.For(0, journals.Count, ctr =>
                 {
-                    foreach (Match match in matches)
+                    Stopwatch time = new Stopwatch();
+                    time.Start();
+                    
+                    var signatura = buf;
+                    Regex regex = new Regex(@signatura,  RegexOptions.Singleline);
+                    RichTextBox bufRTB = new RichTextBox();
+                    
+                    waitHandler.WaitOne();
+                    
+                    string textBuffer = File.ReadAllText(journals[ctr], Encoding.Default);
+                    bufRTB.AppendText(textBuffer + '\n');
+                    MatchCollection matches = regex.Matches(bufRTB.Text);
+                    
+                    waitHandler.Set();
+
+                    if (matches.Count > 0)
                     {
-                        richTextBoxParseResult.Text += match.Index + " " + match.Value + "\r\n";
-                        Color value;
-                        if (!signatures.TryGetValue(buf, out value))
-                            throw new Exception("Невозможно получить значение цвета!");
-                        SetSelectionStyle(match.Index, match.Length, FontStyle.Underline, value);
+                        foreach (Match match in matches)
+                        {
+                            waitHandler.WaitOne();
+                            richTextBoxParseResult.Text += "В журнале " + journals[ctr] + " найдено вхождение строки: ";
+                            richTextBoxParseResult.Text += match.Index + " " + match.Value + "\r\n";
+                            waitHandler.Set();
+                            
+                            Color value;
+                            
+                            waitHandler.WaitOne();
+                            if (!signatures.TryGetValue(buf, out value))
+                                throw new Exception("Невозможно получить значение цвета!");
+                            waitHandler.Set();
+                            
+                            var padding = 0;
+                
+                            for (int i = 0; i < ctr; i++)
+                            {
+                                waitHandler.WaitOne();
+                                padding += journalsLength[i];
+                                waitHandler.Set();
+                            }
+                            
+                            waitHandler.WaitOne();
+                            SetSelectionStyle(match.Index + padding, match.Length, FontStyle.Underline, value);
+                            waitHandler.Set();
+                        }
                     }
-                }
-                else
-                {
-                    richTextBoxParseResult.Text += "Совпадений не найдено" + "\r\n";
-                }
+                    else
+                    {
+                        waitHandler.WaitOne();
+                        richTextBoxParseResult.Text += "В журнале " + journals[ctr] + " совпадений не найдено." + "\r\n";
+                        waitHandler.Set();
+                    }
+                    
+                    time.Stop();
+                    
+                    string elapsedTime = String.Format("{0:00}:{1:00}:{2:00}.{3:000}",
+                        time.Elapsed.Hours, 
+                        time.Elapsed.Minutes, 
+                        time.Elapsed.Seconds,
+                        time.Elapsed.Milliseconds);
+                    
+                    waitHandler.WaitOne();
+                    richTextBoxParseResult.AppendText("Время парсинга журнала " + journals[ctr] + ' ' + elapsedTime + "\r\n");
+                    waitHandler.Set();
+                });
                 
-                
-                MessageBox.Show("Анта бака!\nВсе хорошо\n", "Успех", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception excptn)
             {
@@ -124,12 +183,25 @@ namespace LogParse
                 {
                     try
                     {
+                        journals.Clear();
+                        journalsLength.Clear();
+                        richTextBoxLog.Text = "";
+                        
                         foreach (var filePath in openFileDialog.FileNames)
                         {
-                            richTextBoxLog.Text += File.ReadAllText(filePath, Encoding.Default);
+                            if (!journals.Contains(filePath))
+                            {
+                                string textBuffer = File.ReadAllText(filePath, Encoding.Default);
+                                richTextBoxLog.AppendText(textBuffer + '\n');/*File.ReadAllText(filePath, Encoding.Default);*/
+                                
+                                RichTextBox bufRTB = new RichTextBox();
+                                bufRTB.AppendText(textBuffer + '\n');
+                                
+                                journals.Add(filePath);
+                                journalsLength.Add(bufRTB.Text.Length);
+                            }
                         }
-
-                        fileText = richTextBoxLog.Text;
+                        
                     }
                     catch (Exception excptn)
                     {
